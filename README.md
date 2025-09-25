@@ -106,3 +106,7 @@ to change the MQTT topic prefix.
   a wired flash and capture logs.
 - Increase `run_duration` in `config/ogrgb.yaml` if your network is slow to
   deliver retained MQTT messages before the device goes back to sleep.
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
