@@ -14,6 +14,7 @@ esphome:
     then:
       - logger.log: "Boot successful."
       - deep_sleep.prevent: deep_sleep_1
+      - script.execute: arm_sleep_timeout
 
 esp32:
   board: esp32-s3-devkitc-1
@@ -61,6 +62,8 @@ mqtt:
       - lambda: |
           id(seen_mask) = 0;
           id(ready) = false;
+          id(sleep_timeout_expired) = false;
+      - script.execute: arm_sleep_timeout
       - delay: 5s
       - lambda: |
           if (!id(ready)) id(ready) = true;
@@ -115,6 +118,10 @@ globals:
     type: bool
     initial_value: "false"
 
+  - id: sleep_timeout_expired
+    type: bool
+    initial_value: "false"
+
   - id: last_color
     type: uint8_t
     initial_value: "255"
@@ -165,6 +172,17 @@ light:
           speed: 10
 
 script:
+  - id: arm_sleep_timeout
+    mode: restart
+    then:
+      - delay: 20s
+      - lambda: |-
+          if (!id(sleep_timeout_expired)) {
+            id(sleep_timeout_expired) = true;
+            ESP_LOGI("sleep", "Sleep timeout expired after 20 seconds.");
+          }
+      - script.execute: maybe_finish_and_sleep
+
   - id: recompute_and_publish
     mode: restart
     then:
@@ -233,11 +251,56 @@ script:
       - lambda: 'if (!id(ready)) return;'
       - if:
           condition:
-            lambda: 'return !id(online_lock);'
+            lambda: 'return id(sleep_timeout_expired);'
           then:
-            - deep_sleep.allow: deep_sleep_1
+            - if:
+                condition:
+                  lambda: 'return id(online_lock);'
+                then:
+                  - lambda: |-
+                      uint8_t missing = (~id(seen_mask)) & 0x07;
+                      std::string missing_list;
+                      if (missing & 0x01) missing_list += (missing_list.empty() ? "" : ", ") + std::string("online_lock");
+                      if (missing & 0x02) missing_list += (missing_list.empty() ? "" : ", ") + std::string("garage_status");
+                      if (missing & 0x04) missing_list += (missing_list.empty() ? "" : ", ") + std::string("light_control");
+                      if (missing_list.empty()) missing_list = "none";
+                      ESP_LOGI("sleep", "Sleep timeout expired but online lock active; remaining awake. Missing topics: %s", missing_list.c_str());
+                else:
+                  - lambda: |-
+                      uint8_t missing = (~id(seen_mask)) & 0x07;
+                      std::string missing_list;
+                      if (missing & 0x01) missing_list += (missing_list.empty() ? "" : ", ") + std::string("online_lock");
+                      if (missing & 0x02) missing_list += (missing_list.empty() ? "" : ", ") + std::string("garage_status");
+                      if (missing & 0x04) missing_list += (missing_list.empty() ? "" : ", ") + std::string("light_control");
+                      if (missing == 0) {
+                        ESP_LOGI("sleep", "Sleep timeout expired; proceeding to deep sleep with all retained topics present.");
+                      } else {
+                        if (missing_list.empty()) missing_list = "unknown";
+                        ESP_LOGW("sleep", "Sleep timeout expired; forcing deep sleep despite missing topics: %s", missing_list.c_str());
+                      }
+                  - deep_sleep.allow: deep_sleep_1
           else:
-            - logger.log: "Online lock active, remaining awake."
+            - if:
+                condition:
+                  lambda: 'return id(seen_mask) == 0x07;'
+                then:
+                  - if:
+                      condition:
+                        lambda: 'return !id(online_lock);'
+                      then:
+                        - lambda: 'ESP_LOGI("sleep", "All retained topics received; entering deep sleep.");'
+                        - deep_sleep.allow: deep_sleep_1
+                      else:
+                        - logger.log: "Online lock active, remaining awake."
+                else:
+                  - lambda: |-
+                      uint8_t missing = (~id(seen_mask)) & 0x07;
+                      std::string missing_list;
+                      if (missing & 0x01) missing_list += (missing_list.empty() ? "" : ", ") + std::string("online_lock");
+                      if (missing & 0x02) missing_list += (missing_list.empty() ? "" : ", ") + std::string("garage_status");
+                      if (missing & 0x04) missing_list += (missing_list.empty() ? "" : ", ") + std::string("light_control");
+                      if (missing_list.empty()) missing_list = "unknown";
+                      ESP_LOGI("sleep", "Waiting for retained topics before sleeping; still missing: %s", missing_list.c_str());
 
   - id: online_lock_timeout_arm
     mode: restart
