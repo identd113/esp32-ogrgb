@@ -13,7 +13,7 @@ esphome:
     priority: 800
     then:
       - logger.log: "Boot successful."
-      - deep_sleep.prevent
+      - deep_sleep.prevent: deep_sleep_1
 
 esp32:
   board: esp32-s3-devkitc-1
@@ -33,11 +33,11 @@ logger:
   baud_rate: 0
 
 ota:
-  password: !secret ota_password
   platform: esphome
+  password: !secret ota_password
 
 mqtt:
-  id: mqtt_client            # <-- needed for id(mqtt_client) in lambdas
+  id: mqtt_client
   broker: !secret mqtt_broker
   port: !secret mqtt_port
   client_id: "${device_name}"
@@ -64,7 +64,7 @@ mqtt:
       - delay: 5s
       - lambda: |
           if (!id(ready)) id(ready) = true;
-      - script.execute: recompute_and_publish     # refresh retained topics every connect
+      - script.execute: recompute_and_publish
       - script.execute: maybe_finish_and_sleep
 
   on_message:
@@ -131,10 +131,10 @@ globals:
     restore_value: true
 
 deep_sleep:
+  id: deep_sleep_1
   run_duration: 3s
   sleep_duration: 30s
 
-# IDF-compatible LED driver (replaces neopixelbus)
 light:
   - platform: esp32_rmt_led_strip
     chipset: WS2812
@@ -184,7 +184,6 @@ script:
 
           id(boot_count)++;
 
-          // --- drive LED + publish light_color only on change ---
           if (color != id(last_color)) {
             id(last_color) = color;
 
@@ -198,18 +197,20 @@ script:
               id(ogrgb_light).turn_on().set_brightness(0.40).set_rgb(1.0, 0.0, 0.0).perform();
             }
 
-            const char* cname = (color == 0) ? "green" : (color == 1) ? "blue" : (color == 2) ? "none" : "red";
+            const char *cname = (color == 0) ? "green" : (color == 1) ? "blue" : (color == 2) ? "none" : "red";
             id(mqtt_client)->publish(
               (std::string)App.get_name() + "/light/light_color",
               cname,
               strlen(cname),
-              1,    // qos
-              true  // retain
+              1,
+              true
             );
           }
 
-          // --- publish consolidated state every time (small, retained) ---
-          const char* cname2 = (id(last_color) == 0) ? "green" : (id(last_color) == 1) ? "blue" : (id(last_color) == 2) ? "none" : "red";
+          const char *cname2 =
+            (id(last_color) == 0) ? "green" :
+            (id(last_color) == 1) ? "blue" :
+            (id(last_color) == 2) ? "none" : "red";
           char buf[160];
           snprintf(buf, sizeof(buf),
             "{\"door_open\":%s,\"og_online\":%s,\"color\":\"%s\",\"boots\":%u}",
@@ -222,8 +223,8 @@ script:
             (std::string)App.get_name() + "/state",
             buf,
             strlen(buf),
-            1,    // qos
-            true  // retain
+            1,
+            true
           );
 
   - id: maybe_finish_and_sleep
@@ -234,7 +235,7 @@ script:
           condition:
             lambda: 'return !id(online_lock);'
           then:
-            - deep_sleep.allow
+            - deep_sleep.allow: deep_sleep_1
           else:
             - logger.log: "Online lock active, remaining awake."
 
@@ -257,4 +258,4 @@ safe_mode:
   on_safe_mode:
     then:
       - logger.log: "Safe mode triggered!"
-      - deep_sleep.prevent
+      - deep_sleep.prevent: deep_sleep_1
