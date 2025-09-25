@@ -86,7 +86,8 @@ to change the MQTT topic prefix.
 
 - The device boots, prevents deep sleep, and waits for MQTT to connect.
 - When connected it resets the state bitmask, republishes retained topics, and
-  schedules a sleep once all required messages have been seen.
+  waits for the retained online-lock, OpenGarage status, and door-state
+  messages before scheduling deep sleep.
 - The WS2812 LED uses the following colors:
   - **Green** – Door open and OpenGarage online
   - **Blue** – Door open while OpenGarage is offline

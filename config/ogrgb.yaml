@@ -230,14 +230,38 @@ script:
   - id: maybe_finish_and_sleep
     mode: restart
     then:
-      - lambda: 'if (!id(ready)) return;'
       - if:
           condition:
-            lambda: 'return !id(online_lock);'
+            lambda: 'return id(ready);'
           then:
-            - deep_sleep.allow: deep_sleep_1
-          else:
-            - logger.log: "Online lock active, remaining awake."
+            - if:
+                condition:
+                  lambda: 'return (id(seen_mask) & 0x07) == 0x07;'
+                then:
+                  - if:
+                      condition:
+                        lambda: 'return !id(online_lock);'
+                      then:
+                        - deep_sleep.allow: deep_sleep_1
+                      else:
+                        - logger.log: "Online lock active, remaining awake."
+                else:
+                  - lambda: |-
+                      uint8_t missing = static_cast<uint8_t>(0x07 & ~id(seen_mask));
+                      std::string topics;
+                      if (missing & 0x01) {
+                        if (!topics.empty()) topics += ", ";
+                        topics += "online lock";
+                      }
+                      if (missing & 0x02) {
+                        if (!topics.empty()) topics += ", ";
+                        topics += "OpenGarage status";
+                      }
+                      if (missing & 0x04) {
+                        if (!topics.empty()) topics += ", ";
+                        topics += "door state";
+                      }
+                      ESP_LOGW("Sleep", "Awaiting retained MQTT updates for: %s", topics.c_str());
 
   - id: online_lock_timeout_arm
     mode: restart
