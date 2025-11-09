@@ -13,6 +13,11 @@ config/
 secrets.example.yaml  # Template for your local secrets
 ```
 
+The repository intentionally maintains a single ESPHome configuration file
+(`config/ogrgb.yaml`) so there is one source of truth for the device setup.
+Remove any stray copies before flashing to avoid confusion over which version
+is active.
+
 Create a `secrets.yaml` (ignored by git) next to this README by copying the
 example file and filling in the real credentials:
 
