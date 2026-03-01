@@ -28,10 +28,11 @@ cp secrets.example.yaml secrets.yaml
 
 ## Prerequisites
 
-Install ESPHome using pip (Python 3.11+) or run it in Docker:
+Install or upgrade ESPHome to the newest release using pip (Python 3.11+) or
+run it in Docker:
 
 ```bash
-pip install --user esphome
+python3 -m pip install --user --upgrade esphome
 # or
 docker pull ghcr.io/esphome/esphome
 ```
