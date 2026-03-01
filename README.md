@@ -9,14 +9,15 @@ sleep unless it is locked online for diagnostics.
 
 ```
 config/
-  ogrgb.yaml          # Main ESPHome configuration
+  ogrgb.yaml          # Existing stable ESPHome configuration
+  ogrgb_v2.yaml       # New ESPHome config targeting recent releases
 secrets.example.yaml  # Template for your local secrets
 ```
 
-The repository intentionally maintains a single ESPHome configuration file
-(`config/ogrgb.yaml`) so there is one source of truth for the device setup.
-Remove any stray copies before flashing to avoid confusion over which version
-is active.
+The repository includes both the original stable configuration (`config/ogrgb.yaml`)
+and a new revision (`config/ogrgb_v2.yaml`) that targets recent ESPHome
+releases. Keep both files so you can migrate safely without overwriting the
+current known-good setup.
 
 Create a `secrets.yaml` (ignored by git) next to this README by copying the
 example file and filling in the real credentials:
@@ -32,9 +33,9 @@ Install or upgrade ESPHome to the newest release using pip (Python 3.11+) or
 run it in Docker:
 
 ```bash
+./scripts/install_esphome_latest.sh
+# or (manual equivalent)
 python3 -m pip install --user --upgrade esphome
-# or
-docker pull ghcr.io/esphome/esphome
 ```
 
 You will also need:
@@ -48,17 +49,18 @@ You will also need:
 
 1. Connect the ESP32 via USB and put it in download mode if required by your
    board.
-2. Run ESPHome from the repository root:
+2. Run ESPHome from the repository root (pick the config version you want to flash):
 
    ```bash
-   esphome run config/ogrgb.yaml
+   esphome run config/ogrgb.yaml      # original
+   esphome run config/ogrgb_v2.yaml   # new version
    ```
 
    The command builds the firmware and opens the serial log. You can append
    `--device /dev/ttyUSB0` to pick a specific serial port.
 
-3. Subsequent deployments can use `esphome upload config/ogrgb.yaml` for faster
-   OTA updates.
+3. Subsequent deployments can use `esphome upload config/ogrgb_v2.yaml` (or `ogrgb.yaml`)
+   for faster OTA updates.
 
 If you prefer Docker:
 
