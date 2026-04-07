@@ -4,7 +4,7 @@ substitutions:
 esphome:
   name: ${device_name}
   friendly_name: OpenGarage RGB Status
-  min_version: 2024.6.0
+  min_version: 2025.10.0
   project:
     name: identd113.esp32_ogrgb
     version: "2.0.0"
@@ -18,6 +18,7 @@ esphome:
     priority: 800
     then:
       - logger.log: "Boot successful."
+      - lambda: 'id(boot_count)++;'
       - deep_sleep.prevent: deep_sleep_1
       - script.execute: arm_sleep_timeout
 
@@ -32,7 +33,7 @@ wifi:
   password: !secret wifi_password
   fast_connect: true
   power_save_mode: HIGH
-  output_power: 17
+  output_power: 13
 
 logger:
   level: WARN
@@ -64,12 +65,13 @@ mqtt:
 
   on_connect:
     then:
+      - light.turn_off: ogrgb_light
       - lambda: |
           id(seen_mask) = 0;
           id(ready) = false;
           id(sleep_timeout_expired) = false;
       - script.execute: arm_sleep_timeout
-      - delay: 5s
+      - delay: 1s
       - lambda: |
           if (!id(ready)) id(ready) = true;
       - script.execute: recompute_and_publish
@@ -180,11 +182,11 @@ script:
   - id: arm_sleep_timeout
     mode: restart
     then:
-      - delay: 20s
+      - delay: 10s
       - lambda: |-
           if (!id(sleep_timeout_expired)) {
             id(sleep_timeout_expired) = true;
-            ESP_LOGI("sleep", "Sleep timeout expired after 20 seconds.");
+            ESP_LOGI("sleep", "Sleep timeout expired after 10 seconds.");
           }
       - script.execute: maybe_finish_and_sleep
 
@@ -205,21 +207,18 @@ script:
             color = 3; light_on = true;
           }
 
-          id(boot_count)++;
+          if (color == 0) {
+            id(ogrgb_light).turn_on().set_brightness(0.40).set_rgb(0.0, 1.0, 0.0).perform();
+          } else if (color == 1) {
+            id(ogrgb_light).turn_on().set_brightness(0.40).set_rgb(0.0, 0.0, 1.0).perform();
+          } else if (color == 2) {
+            id(ogrgb_light).turn_off().perform();
+          } else {
+            id(ogrgb_light).turn_on().set_brightness(0.40).set_rgb(1.0, 0.0, 0.0).perform();
+          }
 
           if (color != id(last_color)) {
             id(last_color) = color;
-
-            if (color == 0) {
-              id(ogrgb_light).turn_on().set_brightness(0.40).set_rgb(0.0, 1.0, 0.0).perform();
-            } else if (color == 1) {
-              id(ogrgb_light).turn_on().set_brightness(0.40).set_rgb(0.0, 0.0, 1.0).perform();
-            } else if (color == 2) {
-              id(ogrgb_light).turn_off().perform();
-            } else {
-              id(ogrgb_light).turn_on().set_brightness(0.40).set_rgb(1.0, 0.0, 0.0).perform();
-            }
-
             const char *cname = (color == 0) ? "green" : (color == 1) ? "blue" : (color == 2) ? "none" : "red";
             id(mqtt_client)->publish(
               (std::string)App.get_name() + "/light/light_color",
