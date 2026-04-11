@@ -20,7 +20,6 @@ esphome:
       - logger.log: "Boot successful."
       - lambda: 'id(boot_count)++;'
       - deep_sleep.prevent: deep_sleep_1
-      - script.execute: arm_sleep_timeout
 
 esp32:
   board: esp32-s3-devkitc-1
@@ -36,8 +35,17 @@ wifi:
   output_power: 13
 
 logger:
-  level: WARN
+  level: DEBUG
   baud_rate: 0
+  on_message:
+    level: DEBUG
+    then:
+      - lambda: |-
+          if (id(online_lock)) {
+            std::string topic = App.get_name() + std::string("/logs");
+            std::string msg = std::string("[") + tag + "] " + message;
+            id(mqtt_client)->publish(topic.c_str(), msg.c_str(), msg.size(), 0, false);
+          }
 
 ota:
   platform: esphome
@@ -65,17 +73,11 @@ mqtt:
 
   on_connect:
     then:
-      - light.turn_off: ogrgb_light
       - lambda: |
           id(seen_mask) = 0;
-          id(ready) = false;
+          id(ready) = true;
           id(sleep_timeout_expired) = false;
       - script.execute: arm_sleep_timeout
-      - delay: 1s
-      - lambda: |
-          if (!id(ready)) id(ready) = true;
-      - script.execute: recompute_and_publish
-      - script.execute: maybe_finish_and_sleep
 
   on_message:
     - topic: "${device_name}/online_lock"
@@ -134,11 +136,6 @@ globals:
     initial_value: "255"
     restore_value: true
 
-  - id: last_light_on
-    type: bool
-    initial_value: "false"
-    restore_value: true
-
   - id: boot_count
     type: uint32_t
     initial_value: "0"
@@ -165,14 +162,14 @@ light:
           payload: "on"
           qos: 1
           retain: true
-      - lambda: 'ESP_LOGD("Light", "Light turned on"); id(last_light_on) = true;'
+      - lambda: 'ESP_LOGD("Light", "Light turned on");'
     on_turn_off:
       - mqtt.publish:
           topic: "${device_name}/light/light_status"
           payload: "off"
           qos: 1
           retain: true
-      - lambda: 'ESP_LOGD("Light", "Light turned off"); id(last_light_on) = false;'
+      - lambda: 'ESP_LOGD("Light", "Light turned off");'
     effects:
       - addressable_rainbow:
           name: "Rainbow"
@@ -191,20 +188,19 @@ script:
       - script.execute: maybe_finish_and_sleep
 
   - id: recompute_and_publish
-    mode: restart
+    mode: queued
     then:
       - lambda: |-
           uint8_t color = 0;
-          bool light_on = false;
 
           if (id(door_open) && id(og_online)) {
-            color = 0; light_on = true;
+            color = 0;
           } else if (id(door_open) && !id(og_online)) {
-            color = 1; light_on = true;
+            color = 1;
           } else if (!id(door_open) && id(og_online)) {
-            color = 2; light_on = false;
+            color = 2;
           } else {
-            color = 3; light_on = true;
+            color = 3;
           }
 
           if (color == 0) {
