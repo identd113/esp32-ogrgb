@@ -43,8 +43,8 @@ wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
   fast_connect: true
-  power_save_mode: HIGH
-  output_power: 13
+  power_save_mode: NONE
+  output_power: 19.5
   # DHCP reservation on the router (MAC d8:3b:da:99:63:e0); a static IP skips the DHCP exchange.
   manual_ip:
     static_ip: 10.0.2.152
