@@ -86,7 +86,7 @@ The configuration expects the following MQTT topics:
 | `ogrgb/light/light_color`         | Outbound  | `red`/`green`/`blue`/`none` | Current color / effect             |
 | `ogrgb/state`                     | Outbound  | JSON      | Consolidated state and boot counter      |
 | `ogrgb/wake`                      | Outbound  | JSON      | Retained. Updated on every wake: `wake_count` (total), `session_wakes` (since the last power-on or reset), `cold_boot`, `timer_wake`, `door_missed`, `door_stale` |
-| `ogrgb/flags`                     | Outbound  | JSON      | Retained. Flags used for the wake, published just before sleep: `door_open`, `og_online`, `online_lock`, `door_known`, `wait_extra_s` |
+| `ogrgb/flags`                     | Outbound  | JSON      | Retained. Flags used for the wake, published just before sleep: `door_open`, `og_online`, `online_lock`, `door_known`, `wait_extra_s`, `awake_ms`, `wifi_ms`, `mqtt_ms` (milliseconds since boot at sleep, Wi-Fi up, MQTT up) |
 | `ogrgb/globals/*` (legacy)        | Outbound  | booleans  | Retained per-flag state for monitoring    |
 
 Adjust the `substitutions.device_name` value in `config/ogrgb.yaml` if you want

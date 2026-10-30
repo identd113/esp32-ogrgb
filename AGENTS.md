@@ -24,7 +24,7 @@ The light shows the garage door state. The device wakes, reads from the broker, 
 **Wait rules**
 - The door state is saved in flash, so it survives deep sleep. A cold boot (power-on or reset) clears it.
 - Door unknown (first boot or after a power cut): wait up to 60 seconds for the door message.
-- Door known: wait 2 seconds plus an extra time. The extra time grows by 2 seconds each wake with no door message, and resets to 0 once it would pass 60 seconds, or when a message arrives.
+- Door known: do not wait for the door message, and assume the door is unchanged. The wait is an extra time that starts at 0. It grows by 2 seconds each wake with no door message, resets to 0 when a message arrives, and also resets once it would pass 60 seconds. The device still waits (up to 5 seconds) for the two retained topics before sleeping.
 - The device sleeps only after all three inputs have arrived on the wake, or after the wait ends.
 
 **Homebridge side**

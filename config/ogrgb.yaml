@@ -14,7 +14,8 @@ esphome:
       - -Os
       - -DCONFIG_ESP32_WIFI_DYNAMIC_TX_BUF
   on_boot:
-    priority: 800
+    # Below the globals' HARDWARE priority (800), so saved values are restored first.
+    priority: 600
     then:
       - logger.log: "Boot successful."
       - lambda: 'id(boot_count)++;'
@@ -44,6 +45,8 @@ wifi:
   fast_connect: true
   power_save_mode: HIGH
   output_power: 13
+  on_connect:
+    - lambda: 'id(wifi_ms) = millis();'
 
 logger:
   level: INFO
@@ -85,6 +88,7 @@ mqtt:
   on_connect:
     then:
       - lambda: |
+          id(mqtt_ms) = millis();
           id(seen_mask) = 0;
           id(ready) = true;
           id(sleep_timeout_expired) = false;
@@ -201,6 +205,14 @@ globals:
     type: bool
     initial_value: "false"
 
+  # Milliseconds since boot when Wi-Fi and MQTT came up this wake. Published in flags.
+  - id: wifi_ms
+    type: uint32_t
+    initial_value: "0"
+  - id: mqtt_ms
+    type: uint32_t
+    initial_value: "0"
+
   # Set on each wake; used only within that wake.
   - id: wake_is_timer
     type: bool
@@ -252,12 +264,22 @@ light:
           speed: 10
 
 script:
-  # Wait for a door message before sleeping. Unknown door: wait up to 60 s.
-  # Known door: wait 2 s plus the extra seconds, which grow while no message arrives.
+  # Door wait. Unknown door (first boot): wait up to 60 s for a door message.
+  # Known door: do not wait, and assume it is unchanged. Each wake without a door message
+  # adds 2 s to the next wait; a door message resets it to 0.
   - id: arm_sleep_timeout
     mode: restart
     then:
-      - delay: !lambda 'return id(door_known) ? (uint32_t)(2000 + id(wait_extra_s) * 1000) : 60000;'
+      - delay: !lambda 'return id(door_known) ? (uint32_t)(id(wait_extra_s) * 1000) : 60000;'
+      # The two retained topics arrive right after connect. Hold sleep until they have
+      # (online_lock decides whether to stay awake), but not forever if the broker is slow.
+      - wait_until:
+          condition:
+            lambda: 'return (id(seen_mask) & 0x03) == 0x03;'
+          timeout: 5s
+      # The debounced recompute may not have run yet; update the light and publish now.
+      - script.execute: recompute_and_publish
+      - script.wait: recompute_and_publish
       - lambda: |-
           if (!id(sleep_timeout_expired)) {
             id(sleep_timeout_expired) = true;
@@ -374,6 +396,7 @@ script:
                         if (missing_list.empty()) missing_list = "unknown";
                         ESP_LOGW("sleep", "Sleep timeout expired; forcing deep sleep despite missing topics: %s", missing_list.c_str());
                       }
+                  - script.execute: publish_flags
                   - script.wait: publish_flags
                   - deep_sleep.allow: deep_sleep_1
           else:
@@ -386,6 +409,7 @@ script:
                         lambda: 'return !id(online_lock);'
                       then:
                         - lambda: 'ESP_LOGI("sleep", "All retained topics received; entering deep sleep.");'
+                        - script.execute: publish_flags
                         - script.wait: publish_flags
                         - deep_sleep.allow: deep_sleep_1
                       else:
@@ -406,14 +430,17 @@ script:
     mode: single
     then:
       - lambda: |-
-          char buf[200];
+          char buf[240];
           snprintf(buf, sizeof(buf),
-            "{\"door_open\":%s,\"og_online\":%s,\"online_lock\":%s,\"door_known\":%s,\"wait_extra_s\":%u}",
+            "{\"door_open\":%s,\"og_online\":%s,\"online_lock\":%s,\"door_known\":%s,\"wait_extra_s\":%u,\"awake_ms\":%u,\"wifi_ms\":%u,\"mqtt_ms\":%u}",
             id(door_open) ? "true" : "false",
             id(og_online) ? "true" : "false",
             id(online_lock) ? "true" : "false",
             id(door_known) ? "true" : "false",
-            (unsigned)id(wait_extra_s));
+            (unsigned)id(wait_extra_s),
+            (unsigned)millis(),
+            (unsigned)id(wifi_ms),
+            (unsigned)id(mqtt_ms));
           id(mqtt_client)->publish(
             (std::string)App.get_name() + "/flags", buf, strlen(buf), 1, true);
       - delay: 300ms
