@@ -45,6 +45,12 @@ wifi:
   fast_connect: true
   power_save_mode: HIGH
   output_power: 13
+  # DHCP reservation on the router (MAC d8:3b:da:99:63:e0); a static IP skips the DHCP exchange.
+  manual_ip:
+    static_ip: 10.0.2.152
+    gateway: 10.0.2.1
+    subnet: 255.255.254.0
+    dns1: 10.0.2.1
   on_connect:
     - lambda: 'id(wifi_ms) = millis();'
 
