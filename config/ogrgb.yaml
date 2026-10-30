@@ -22,7 +22,11 @@ esphome:
           // A deep-sleep wake continues the battery session; power-on or reset starts a new one.
           id(cold_boot) = (esp_reset_reason() != ESP_RST_DEEPSLEEP);
           if (id(cold_boot)) {
+            // Power-on or reset: forget the saved door state and the wait extension.
             id(session_wakes) = 0;
+            id(door_open) = false;
+            id(door_known) = false;
+            id(wait_extra_s) = 0;
             id(wake_pending) = true;
           }
       - deep_sleep.prevent: deep_sleep_1
@@ -88,21 +92,17 @@ mqtt:
           // Heartbeat: one message per timer wake, published after the MQTT connection is up.
           if (id(wake_pending)) {
             id(wake_pending) = false;
-            bool stale = id(door_missed) >= 3;
-            char buf[220];
+            char buf[200];
             snprintf(buf, sizeof(buf),
-              "{\"wake_count\":%u,\"session_wakes\":%u,\"cold_boot\":%s,\"timer_wake\":%s,\"door_missed\":%u,\"door_stale\":%s}",
+              "{\"wake_count\":%u,\"session_wakes\":%u,\"cold_boot\":%s,\"timer_wake\":%s,\"door_known\":%s,\"wait_extra_s\":%u}",
               (unsigned)id(wake_count),
               (unsigned)id(session_wakes),
               id(cold_boot) ? "true" : "false",
               id(wake_is_timer) ? "true" : "false",
-              (unsigned)id(door_missed),
-              stale ? "true" : "false");
+              id(door_known) ? "true" : "false",
+              (unsigned)id(wait_extra_s));
             id(mqtt_client)->publish(
               (std::string)App.get_name() + "/wake", buf, strlen(buf), 1, true);
-            if (stale) {
-              ESP_LOGW("door", "No light_control update in %u wakes; check the door script", (unsigned)id(door_missed));
-            }
           }
       - script.execute: arm_sleep_timeout
 
@@ -124,19 +124,35 @@ mqtt:
             id(seen_mask) |= 0x02;
         - script.execute: request_recompute
 
-    - topic: "${device_name}/light_control"
-      qos: 1
+    # Live only (not retained): arrives about every 18 s while the device is awake.
+    - topic: "My OpenGarage/OUT/STATE"
+      qos: 0
       then:
         - lambda: |
-            id(door_open) = (x == "on");
+            id(door_open) = (x == "OPEN");
+            id(door_known) = true;
+            id(wait_extra_s) = 0;
             id(door_seen_this_wake) = true;
             id(seen_mask) |= 0x04;
         - script.execute: request_recompute
 
 globals:
+  # Door state from OpenGarage. Restored so the light holds through deep sleep;
+  # cleared on a cold boot in on_boot.
   - id: door_open
     type: bool
     initial_value: "false"
+    restore_value: true
+  # True once a door state has been received since the last power-on or reset.
+  - id: door_known
+    type: bool
+    initial_value: "false"
+    restore_value: true
+  # Extra seconds added to the wait window while no door message arrives (0 to 60).
+  - id: wait_extra_s
+    type: uint32_t
+    initial_value: "0"
+    restore_value: true
   - id: og_online
     type: bool
     initial_value: "true"
@@ -166,19 +182,15 @@ globals:
     initial_value: "0"
     restore_value: true
 
-  # Wake heartbeat and stale-door check. Restored so they survive deep sleep.
+  # Wake heartbeat. Restored so the count survives deep sleep.
   - id: wake_count
     type: uint32_t
     initial_value: "0"
     restore_value: true
-  - id: door_missed
-    type: uint32_t
-    initial_value: "0"
-    restore_value: true
+  # Set when a door message arrives during the current wake.
   - id: door_seen_this_wake
     type: bool
     initial_value: "false"
-    restore_value: true
   # Wakes since the last power-on or reset. Reset to 0 on a cold boot; kept across deep sleep.
   - id: session_wakes
     type: uint32_t
@@ -206,7 +218,6 @@ deep_sleep:
         id(wake_count)++;
         id(session_wakes)++;
         id(wake_is_timer) = (cause == deep_sleep::WAKEUP_CAUSE_TIMER);
-        id(door_missed) = id(door_seen_this_wake) ? 0 : id(door_missed) + 1;
         id(door_seen_this_wake) = false;
         id(wake_pending) = true;
 
@@ -241,14 +252,25 @@ light:
           speed: 10
 
 script:
+  # Wait for a door message before sleeping. Unknown door: wait up to 60 s.
+  # Known door: wait 2 s plus the extra seconds, which grow while no message arrives.
   - id: arm_sleep_timeout
     mode: restart
     then:
-      - delay: 10s
+      - delay: !lambda 'return id(door_known) ? (uint32_t)(2000 + id(wait_extra_s) * 1000) : 60000;'
       - lambda: |-
           if (!id(sleep_timeout_expired)) {
             id(sleep_timeout_expired) = true;
-            ESP_LOGI("sleep", "Sleep timeout expired after 10 seconds.");
+            ESP_LOGI("sleep", "Door wait expired (door_known=%d, extra=%u s).", (int)id(door_known), (unsigned)id(wait_extra_s));
+          }
+          // No door message this wake while the door is known: widen the next wait by 2 s,
+          // and reset to 0 once a miss happens at 60 s.
+          if (id(door_known) && !id(door_seen_this_wake)) {
+            if (id(wait_extra_s) >= 60) {
+              id(wait_extra_s) = 0;
+            } else {
+              id(wait_extra_s) += 2;
+            }
           }
       - script.execute: maybe_finish_and_sleep
 
@@ -352,6 +374,7 @@ script:
                         if (missing_list.empty()) missing_list = "unknown";
                         ESP_LOGW("sleep", "Sleep timeout expired; forcing deep sleep despite missing topics: %s", missing_list.c_str());
                       }
+                  - script.wait: publish_flags
                   - deep_sleep.allow: deep_sleep_1
           else:
             - if:
@@ -363,6 +386,7 @@ script:
                         lambda: 'return !id(online_lock);'
                       then:
                         - lambda: 'ESP_LOGI("sleep", "All retained topics received; entering deep sleep.");'
+                        - script.wait: publish_flags
                         - deep_sleep.allow: deep_sleep_1
                       else:
                         - logger.log: "Online lock active, remaining awake."
@@ -375,6 +399,24 @@ script:
                       if (missing & 0x04) missing_list += (missing_list.empty() ? "" : ", ") + std::string("light_control");
                       if (missing_list.empty()) missing_list = "unknown";
                       ESP_LOGI("sleep", "Waiting for retained topics before sleeping; still missing: %s", missing_list.c_str());
+
+  # Retained snapshot of the flags used for this wake, published just before sleep.
+  # The short delay lets the publish leave before deep sleep starts.
+  - id: publish_flags
+    mode: single
+    then:
+      - lambda: |-
+          char buf[200];
+          snprintf(buf, sizeof(buf),
+            "{\"door_open\":%s,\"og_online\":%s,\"online_lock\":%s,\"door_known\":%s,\"wait_extra_s\":%u}",
+            id(door_open) ? "true" : "false",
+            id(og_online) ? "true" : "false",
+            id(online_lock) ? "true" : "false",
+            id(door_known) ? "true" : "false",
+            (unsigned)id(wait_extra_s));
+          id(mqtt_client)->publish(
+            (std::string)App.get_name() + "/flags", buf, strlen(buf), 1, true);
+      - delay: 300ms
 
   - id: online_lock_timeout_arm
     mode: restart
