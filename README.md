@@ -80,11 +80,12 @@ The configuration expects the following MQTT topics:
 | --------------------------------- | --------- | -------- | ------------------------------------------ |
 | `ogrgb/online_lock`               | Inbound   | `true`/`false` | Keeps the device awake for diagnostics |
 | `My OpenGarage/OUT/STATUS`        | Inbound   | `online`/`offline` | State published by the OpenGarage hub |
-| `ogrgb/light_control`             | Inbound   | `on`/`off` | Garage door contact sensor status      |
+| `ogrgb/light_control`             | Inbound   | `on`/`off` | Garage door status, published by the external door script |
 | `ogrgb/status`                    | Outbound  | `online`/`offline` | Device birth/will message             |
 | `ogrgb/light/light_status`        | Outbound  | `on`/`off` | Mirrors the LED's power state          |
 | `ogrgb/light/light_color`         | Outbound  | `red`/`green`/`blue`/`none` | Current color / effect             |
 | `ogrgb/state`                     | Outbound  | JSON      | Consolidated state and boot counter      |
+| `ogrgb/wake`                      | Outbound  | JSON      | Retained. Updated on every wake: `wake_count` (total), `session_wakes` (since the last power-on or reset), `cold_boot`, `timer_wake`, `door_missed`, `door_stale` |
 | `ogrgb/globals/*` (legacy)        | Outbound  | booleans  | Retained per-flag state for monitoring    |
 
 Adjust the `substitutions.device_name` value in `config/ogrgb.yaml` if you want

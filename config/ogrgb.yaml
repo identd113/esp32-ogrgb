@@ -4,12 +4,11 @@ substitutions:
 esphome:
   name: ${device_name}
   friendly_name: OpenGarage RGB Status
-  min_version: 2025.10.0
+  min_version: 2026.8.0
   project:
     name: identd113.esp32_ogrgb
     version: "2.0.0"
   platformio_options:
-    board_build.f_cpu: 80000000L
     build_type: release
     build_flags:
       - -Os
@@ -19,11 +18,19 @@ esphome:
     then:
       - logger.log: "Boot successful."
       - lambda: 'id(boot_count)++;'
+      - lambda: |
+          // A deep-sleep wake continues the battery session; power-on or reset starts a new one.
+          id(cold_boot) = (esp_reset_reason() != ESP_RST_DEEPSLEEP);
+          if (id(cold_boot)) {
+            id(session_wakes) = 0;
+            id(wake_pending) = true;
+          }
       - deep_sleep.prevent: deep_sleep_1
 
 esp32:
   board: esp32-s3-devkitc-1
   variant: ESP32S3
+  cpu_frequency: 80MHz
   framework:
     type: esp-idf
 
@@ -35,10 +42,10 @@ wifi:
   output_power: 13
 
 logger:
-  level: DEBUG
+  level: INFO
   baud_rate: 0
   on_message:
-    level: DEBUG
+    level: INFO
     then:
       - lambda: |-
           if (id(online_lock)) {
@@ -77,6 +84,26 @@ mqtt:
           id(seen_mask) = 0;
           id(ready) = true;
           id(sleep_timeout_expired) = false;
+      - lambda: |
+          // Heartbeat: one message per timer wake, published after the MQTT connection is up.
+          if (id(wake_pending)) {
+            id(wake_pending) = false;
+            bool stale = id(door_missed) >= 3;
+            char buf[220];
+            snprintf(buf, sizeof(buf),
+              "{\"wake_count\":%u,\"session_wakes\":%u,\"cold_boot\":%s,\"timer_wake\":%s,\"door_missed\":%u,\"door_stale\":%s}",
+              (unsigned)id(wake_count),
+              (unsigned)id(session_wakes),
+              id(cold_boot) ? "true" : "false",
+              id(wake_is_timer) ? "true" : "false",
+              (unsigned)id(door_missed),
+              stale ? "true" : "false");
+            id(mqtt_client)->publish(
+              (std::string)App.get_name() + "/wake", buf, strlen(buf), 1, true);
+            if (stale) {
+              ESP_LOGW("door", "No light_control update in %u wakes; check the door script", (unsigned)id(door_missed));
+            }
+          }
       - script.execute: arm_sleep_timeout
 
   on_message:
@@ -87,8 +114,7 @@ mqtt:
             id(online_lock) = (x == "true");
             id(seen_mask) |= 0x01;
         - script.execute: online_lock_timeout_arm
-        - script.execute: recompute_and_publish
-        - script.execute: maybe_finish_and_sleep
+        - script.execute: request_recompute
 
     - topic: "My OpenGarage/OUT/STATUS"
       qos: 1
@@ -96,17 +122,16 @@ mqtt:
         - lambda: |
             id(og_online) = (x == "online");
             id(seen_mask) |= 0x02;
-        - script.execute: recompute_and_publish
-        - script.execute: maybe_finish_and_sleep
+        - script.execute: request_recompute
 
     - topic: "${device_name}/light_control"
       qos: 1
       then:
         - lambda: |
             id(door_open) = (x == "on");
+            id(door_seen_this_wake) = true;
             id(seen_mask) |= 0x04;
-        - script.execute: recompute_and_publish
-        - script.execute: maybe_finish_and_sleep
+        - script.execute: request_recompute
 
 globals:
   - id: door_open
@@ -141,17 +166,57 @@ globals:
     initial_value: "0"
     restore_value: true
 
+  # Wake heartbeat and stale-door check. Restored so they survive deep sleep.
+  - id: wake_count
+    type: uint32_t
+    initial_value: "0"
+    restore_value: true
+  - id: door_missed
+    type: uint32_t
+    initial_value: "0"
+    restore_value: true
+  - id: door_seen_this_wake
+    type: bool
+    initial_value: "false"
+    restore_value: true
+  # Wakes since the last power-on or reset. Reset to 0 on a cold boot; kept across deep sleep.
+  - id: session_wakes
+    type: uint32_t
+    initial_value: "0"
+    restore_value: true
+  # Set in on_boot each time the device starts; true after power-on or reset.
+  - id: cold_boot
+    type: bool
+    initial_value: "false"
+
+  # Set on each wake; used only within that wake.
+  - id: wake_is_timer
+    type: bool
+    initial_value: "false"
+  - id: wake_pending
+    type: bool
+    initial_value: "false"
+
 deep_sleep:
   id: deep_sleep_1
   run_duration: 3s
   sleep_duration: 30s
+  on_wake:
+    - lambda: |
+        id(wake_count)++;
+        id(session_wakes)++;
+        id(wake_is_timer) = (cause == deep_sleep::WAKEUP_CAUSE_TIMER);
+        id(door_missed) = id(door_seen_this_wake) ? 0 : id(door_missed) + 1;
+        id(door_seen_this_wake) = false;
+        id(wake_pending) = true;
 
 light:
   - platform: esp32_rmt_led_strip
     chipset: WS2812
     pin: GPIO48
     num_leds: 1
-    rgb_order: GRB
+    channel_colors: GRB
+
     name: "${device_name} Light"
     id: ogrgb_light
     default_transition_length: 0s
@@ -185,6 +250,15 @@ script:
             id(sleep_timeout_expired) = true;
             ESP_LOGI("sleep", "Sleep timeout expired after 10 seconds.");
           }
+      - script.execute: maybe_finish_and_sleep
+
+  # Debounce: the three retained topics arrive together on a wake, so wait briefly
+  # and run the light update and state publish once. It then decides whether to sleep.
+  - id: request_recompute
+    mode: restart
+    then:
+      - delay: 500ms
+      - script.execute: recompute_and_publish
       - script.execute: maybe_finish_and_sleep
 
   - id: recompute_and_publish
